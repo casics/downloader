@@ -18,9 +18,10 @@ import plac
 import wget
 from time import time
 
-from database import *
-from reporecord import *
+sys.path.append(os.path.join(os.path.dirname(__file__), "../common"))
+from dbinterface import *
 from utils import *
+from reporecord import *
 
 
 # Globals
@@ -28,7 +29,7 @@ from utils import *
 # List of languages we watch for.
 
 sought_languages = ['Java', 'Python', 'C++']
-download_dir = "downloads"
+default_download_dir = "downloads"
 
 
 # Main body.
@@ -36,12 +37,12 @@ download_dir = "downloads"
 # Currently this only does GitHub, but extending this to handle other hosts
 # should hopefully be possible.
 
-def main():
+def main(dir=default_download_dir):
     '''Downloads copies of respositories.'''
-    download()
+    download(dir)
 
 
-def download():
+def download(dir):
     db = Database()
     dbroot = db.open()
     msg('Downloading ...')
@@ -53,12 +54,12 @@ def download():
             continue
         if not any(lang in entry.languages for lang in language_codes):
             continue
-        if zip_file_exists(entry.path, download_dir):
+        if zip_file_exists(entry.path, dir):
             continue
 
         # Create a subdirectory if needed and download the zip file.
         msg(entry.path + ':')
-        dirpath = download_dir + "/" + entry.path
+        dirpath = dir + "/" + entry.path
         os.makedirs(dirpath, exist_ok=True)
         url = "https://github.com/{}/archive/master.zip".format(entry.path)
         outpath = dirpath
@@ -82,6 +83,16 @@ def zip_file_exists(path, dir):
     # This is the path that GitHub creates for zip files
     filename = path[path.rfind('/') + 1 :] + '-master.zip'
     return os.path.exists(dir + '/' + path + '/' + filename)
+
+
+# Plac annotations for main function arguments
+# .............................................................................
+# Argument annotations are: (help, kind, abbrev, type, choices, metavar)
+# Plac automatically adds a -h argument for help, so no need to do it here.
+
+main.__annotations__ = dict(
+    dir = ('download directory root', 'option', 'd', str),
+)
 
 
 # Entry point
