@@ -71,14 +71,20 @@ def download(dir):
               .format(entries_matching, entries_examined, entry.path), end='', flush=True)
         os.makedirs(localpath, exist_ok=True)
         url = "https://github.com/{}/archive/master.zip".format(entry.path)
-        outfile = wget.download(url, bar=None, out=localpath)
+        try:
+            outfile = wget.download(url, bar=None, out=localpath)
+        except Exception as e:
+            msg('Error attempting to download {}: {}'.format(entry.path, str(e)))
+            continue
+
+        # Unzip it if we got it.
         filesize = file_size(outfile)
         try:
             zipfile.ZipFile(outfile).extractall(localpath)
             os.remove(outfile)
         except Exception as e:
-            msg('{} left unzipped: '.format(outfile, str(e)))
-            pass
+            msg('{} left unzipped: {}'.format(outfile, str(e)))
+            continue
         msg(filesize)
     db.close()
     msg('')
