@@ -73,8 +73,12 @@ def download(dir):
         url = "https://github.com/{}/archive/master.zip".format(entry.path)
         outfile = wget.download(url, bar=None, out=localpath)
         filesize = file_size(outfile)
-        zipfile.ZipFile(outfile).extractall(localpath)
-        os.remove(outfile)
+        try:
+            zipfile.ZipFile(outfile).extractall(localpath)
+            os.remove(outfile)
+        except Exception as e:
+            msg('{} left unzipped: '.format(outfile, str(e)))
+            pass
         msg(filesize)
     db.close()
     msg('')
