@@ -18,6 +18,9 @@ import plac
 import wget
 import humanize
 import zipfile
+import http
+import urllib
+from base64 import b64encode
 from time import time
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../common"))
