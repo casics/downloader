@@ -57,27 +57,42 @@ def download(dir):
             continue
         entries_examined += 1
 
-        # Only download repos that have a language we're watching for.
+        # Download repos for languages we're watching, skipping ones we
+        # already have downloaded.
+
         if not any(lang in entry.languages for lang in language_codes):
             continue
-        entries_matching += 1
-        # Skip ones we already have a copy of.
         localpath = os.path.join(dir, entry.path)
         if os.path.exists(localpath):
             continue
+        entries_matching += 1
 
         # Create a subdirectory if needed and download the zip file.
+
         print('[{} out of {} examined] {}: '
               .format(entries_matching, entries_examined, entry.path), end='', flush=True)
         os.makedirs(localpath, exist_ok=True)
+        # Try first with the default master branch.
         url = "https://github.com/{}/archive/master.zip".format(entry.path)
         try:
             outfile = wget.download(url, bar=None, out=localpath)
         except Exception as e:
-            msg('Error attempting to download {}: {}'.format(entry.path, str(e)))
-            continue
+            # If we get a 404 from GitHub, it may mean there is no "master".
+            # To find out what it really is, it costs an API call, so we don't
+            # do it unless we really have to.
+            if e.code == 404:
+                newurl = get_archive_url(entry.path)
+                try:
+                    outfile = wget.download(newurl, bar=None, out=localpath)
+                except Exception as newe:
+                    msg('Error attempting to download {}: {}'.format(entry.path, str(newe)))
+                    continue
+            else:
+                msg('Error attempting to download {}: {}'.format(entry.path, str(e)))
+                continue
 
         # Unzip it if we got it.
+
         filesize = file_size(outfile)
         try:
             zipfile.ZipFile(outfile).extractall(localpath)
@@ -102,6 +117,40 @@ def zip_file_exists(path, dir):
 
 def file_size(path):
     return humanize.naturalsize(os.path.getsize(path))
+
+
+def get_archive_url(path):
+    cfg = Config()
+    try:
+        login = cfg.get(Host.name(Host.GITHUB), 'login')
+        password = cfg.get(Host.name(Host.GITHUB), 'password')
+    except Exception as err:
+        msg(err)
+        text = 'Failed to read "login" and/or "password" for {}'.format(
+            Host.name(Host.GITHUB))
+        raise SystemExit(text)
+
+    auth = '{0}:{1}'.format(login, password)
+    headers = {
+        'User-Agent': login,
+        'Authorization': 'Basic ' + b64encode(bytes(auth, 'ascii')).decode('ascii'),
+        'Accept': 'application/vnd.github.v3.raw',
+    }
+    url = "https://api.github.com/repos/{}/zipball".format(path)
+
+    conn = http.client.HTTPSConnection("api.github.com")
+    conn.request("GET", url, {}, headers)
+    response = conn.getresponse()
+    if response.status == 302:
+        headers_list = response.getheaders()
+        for tuple in headers_list:
+            if tuple[0] == 'Location':
+                return tuple[1]
+        return None
+    elif response.status == 200:
+        return response.readall().decode('utf-8')
+    else:
+        return None
 
 
 # Plac annotations for main function arguments
