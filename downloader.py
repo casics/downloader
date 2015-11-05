@@ -16,6 +16,8 @@ import os
 import errno
 import plac
 import wget
+import humanize
+import zipfile
 from time import time
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../common"))
@@ -48,29 +50,32 @@ def download(dir):
     msg('Downloading ...')
     start = time()
     language_codes = [Language.identifier(lang) for lang in sought_languages]
-    for i, key in enumerate(dbroot):
-        entry = dbroot[key]
+    entries_examined = 0
+    entries_matching = 0
+    for key, entry in dbroot.items():
         if not isinstance(entry, RepoEntry):
             continue
+        entries_examined += 1
+
+        # Only download repos that have a language we're watching for.
         if not any(lang in entry.languages for lang in language_codes):
             continue
-        if zip_file_exists(entry.path, dir):
+        entries_matching += 1
+        # Skip ones we already have a copy of.
+        localpath = os.path.join(dir, entry.path)
+        if os.path.exists(localpath):
             continue
 
         # Create a subdirectory if needed and download the zip file.
-        msg(entry.path + ':')
-        dirpath = dir + "/" + entry.path
-        os.makedirs(dirpath, exist_ok=True)
+        print('[{} out of {} examined] {}: '
+              .format(entries_matching, entries_examined, entry.path), end='', flush=True)
+        os.makedirs(localpath, exist_ok=True)
         url = "https://github.com/{}/archive/master.zip".format(entry.path)
-        outpath = dirpath
-        wget.download(url, bar=wget.bar_adaptive, out=dirpath)
-        msg('')
-
-        if (i + 1) % 100 == 0:
-            msg('*** {} entries processed [{:2f}] ***'.format(i + 1, time() - start))
-            start = time()
-    # update_progress(1)
-
+        outfile = wget.download(url, bar=None, out=localpath)
+        filesize = file_size(outfile)
+        zipfile.ZipFile(outfile).extractall(localpath)
+        os.remove(outfile)
+        msg(filesize)
     db.close()
     msg('')
     msg('Done.')
@@ -83,6 +88,10 @@ def zip_file_exists(path, dir):
     # This is the path that GitHub creates for zip files
     filename = path[path.rfind('/') + 1 :] + '-master.zip'
     return os.path.exists(dir + '/' + path + '/' + filename)
+
+
+def file_size(path):
+    return humanize.naturalsize(os.path.getsize(path))
 
 
 # Plac annotations for main function arguments
