@@ -45,7 +45,7 @@ default_download_dir = "downloads"
 
 def main(dir=default_download_dir):
     '''Downloads copies of respositories.'''
-    locale.setlocale(locale.LC_CTYPE, 'en_US.UTF-8')
+    locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
     download(dir)
 
 
