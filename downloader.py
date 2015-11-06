@@ -161,19 +161,24 @@ def make_path(dir, entry):
     '''Creates a path of the following form:
         dir/a/b/owner/path
     where
-        dir  = the first argument
-        a    = the first character of the owner's name
-        b    = the second character of the owner's name
-        path = the path (really, the full name) of the repository on GitHub
+        dir   = the first argument
+        a     = the first character of the owner's name
+        b     = the second character of the owner's name
+        owner = the owner's name
+        path  = the path (really, the full name) of the repository on GitHub
 
     If the owner's name has only 1 character, then the path is:
-        dir/a/owner/path
+        dir/a/@/path
+    where "@" is the literal character "@".  Since there can only be one
+    repository whose names have single characters (0, 1, 2, ..., a, b, c, ...)
+    then there can only be one 0/@, 1/@, 2/@, ..., a/@, b/@, etc., so the
+    contents of these directories are the repositories for that owner.
     '''
     subpath = entry.path[entry.path.find('/') + 1:]
+    first = entry.owner[0]
     if len(entry.owner) == 1:           # Single-character owner name
-        return os.path.join(dir, entry.owner, entry.owner, subpath)
+        return os.path.join(dir, first, '@', subpath)
     else:                               # Multicharacter owner name
-        first = entry.owner[0]
         second = entry.owner[1]
         return os.path.join(dir, first, second, entry.owner, subpath)
 
