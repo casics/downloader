@@ -18,6 +18,7 @@ import plac
 import wget
 import humanize
 import zipfile
+import locale
 import http
 import urllib
 from base64 import b64encode
@@ -44,6 +45,7 @@ default_download_dir = "downloads"
 
 def main(dir=default_download_dir):
     '''Downloads copies of respositories.'''
+    locale.setlocale(locale.LC_CTYPE, 'en_US.UTF-8')
     download(dir)
 
 
@@ -65,7 +67,7 @@ def download(dir):
 
         if not any(lang in entry.languages for lang in language_codes):
             continue
-        localpath = os.path.join(dir, entry.path)
+        localpath = make_path(dir, entry)
         if os.path.exists(localpath):
             continue
         entries_matching += 1
@@ -153,6 +155,27 @@ def get_archive_url(path):
         return response.readall().decode('utf-8')
     else:
         return None
+
+
+def make_path(dir, entry):
+    '''Creates a path of the following form:
+        dir/a/b/owner/path
+    where
+        dir  = the first argument
+        a    = the first character of the owner's name
+        b    = the second character of the owner's name
+        path = the path (really, the full name) of the repository on GitHub
+
+    If the owner's name has only 1 character, then the path is:
+        dir/a/owner/path
+    '''
+    subpath = entry.path[entry.path.find('/') + 1:]
+    if len(entry.owner) == 1:           # Single-character owner name
+        return os.path.join(dir, entry.owner, entry.owner, subpath)
+    else:                               # Multicharacter owner name
+        first = entry.owner[0]
+        second = entry.owner[1]
+        return os.path.join(dir, first, second, entry.owner, subpath)
 
 
 # Plac annotations for main function arguments
