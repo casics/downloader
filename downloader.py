@@ -103,7 +103,7 @@ def download(dir):
             zipfile.ZipFile(outfile).extractall(localpath)
             os.remove(outfile)
         except Exception as e:
-            msg('{} left unzipped: {}'.format(outfile, str(e)))
+            msg('{} left zipped: {}'.format(outfile, str(e)))
             continue
         msg(filesize)
     db.close()
