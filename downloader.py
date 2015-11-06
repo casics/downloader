@@ -145,11 +145,10 @@ def get_archive_url(path):
     conn.request("GET", url, {}, headers)
     response = conn.getresponse()
     if response.status == 302:
-        headers_list = response.getheaders()
-        for tuple in headers_list:
-            if tuple[0] == 'Location':
-                return tuple[1]
-        return None
+        try:
+            return next(y for x, y in response.getheaders() if x == 'Location')
+        except:
+            return None
     elif response.status == 200:
         return response.readall().decode('utf-8')
     else:
