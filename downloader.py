@@ -58,7 +58,7 @@ def download(dir):
     entries_examined = 0
     entries_matching = 0
     for key, entry in dbroot.items():
-        if not isinstance(entry, RepoEntry):
+        if not (isinstance(entry, RepoData) or isinstance(entry, RepoEntry)):
             continue
         entries_examined += 1
 
