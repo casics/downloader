@@ -94,15 +94,15 @@ def download(downloads_root, id_list):
                 # To find out what it really is, it costs an API call, so we don't
                 # do it unless we really have to.
                 if e.code == 404:
-                    newurl = get_archive_url(entry.path)
+                    newurl = get_archive_url(entry)
                     try:
                         outfile = wget.download(newurl, bar=None, out=downloads_root)
                     except Exception as newe:
-                        msg('Failed to download {}: {}'.format(entry.path, str(newe)))
+                        msg('Failed to download {}: {}'.format(entry.id, str(newe)))
                         failures += 1
                         continue
                 else:
-                    msg('Failed to download {}: {}'.format(entry.path, str(e)))
+                    msg('Failed to download {}: {}'.format(entry.id, str(e)))
                     failures += 1
                     continue
 
@@ -151,7 +151,7 @@ def file_size(path):
     return humanize.naturalsize(os.path.getsize(path))
 
 
-def get_archive_url(path):
+def get_archive_url(entry):
     cfg = Config()
     try:
         login = cfg.get(Host.name(Host.GITHUB), 'login')
@@ -168,7 +168,7 @@ def get_archive_url(path):
         'Authorization': 'Basic ' + b64encode(bytes(auth, 'ascii')).decode('ascii'),
         'Accept': 'application/vnd.github.v3.raw',
     }
-    url = "https://api.github.com/repos/{}/zipball".format(path)
+    url = "https://api.github.com/repos/{}/{}/zipball".format(entry.owner, entry.name)
 
     conn = http.client.HTTPSConnection("api.github.com")
     conn.request("GET", url, {}, headers)
