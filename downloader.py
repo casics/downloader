@@ -21,6 +21,7 @@ import zipfile
 import locale
 import http
 import urllib
+import shutil
 from base64 import b64encode
 from time import time
 
@@ -32,10 +33,9 @@ from reporecord import *
 
 # Globals
 # .............................................................................
-# List of languages we watch for.
 
-sought_languages = ['Java', 'Python', 'C++']
 default_download_dir = "downloads"
+max_failures = 10
 
 
 # Main body.
@@ -43,70 +43,97 @@ default_download_dir = "downloads"
 # Currently this only does GitHub, but extending this to handle other hosts
 # should hopefully be possible.
 
-def main(dir=default_download_dir):
+def main(downloads_root=default_download_dir, file=None, id=None):
     '''Downloads copies of respositories.'''
+    if id:
+        id_list = [int(id)]
+    elif file:
+        with open(file) as f:
+            id_list = [int(x) for x in f.read().splitlines()]
+    else:
+        msg('Need to provide a list of what to download')
+        return
     locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
-    download(dir)
+    download(downloads_root, id_list)
 
 
-def download(dir):
-    db = Database()
-    dbroot = db.open()
+def download(downloads_root, id_list):
+    dbinterface = Database()
+    db = dbinterface.open()
+
+    repo_iterator = iter(id_list)
+    total = len(id_list)
+
     msg('Downloading ...')
+    count = 0
+    failures = 0
     start = time()
-    language_codes = [Language.identifier(lang) for lang in sought_languages]
-    entries_examined = 0
-    entries_matching = 0
-    for key, entry in dbroot.items():
-        if not (isinstance(entry, RepoData) or isinstance(entry, RepoEntry)):
-            continue
-        entries_examined += 1
-
-        # Download repos for languages we're watching, skipping ones we
-        # already have downloaded.
-
-        if not any(lang in entry.languages for lang in language_codes):
-            continue
-        localpath = make_path(dir, entry)
-        if os.path.exists(localpath):
-            continue
-        entries_matching += 1
-
-        # Create a subdirectory if needed and download the zip file.
-
-        print('[{} out of {} examined] {}: '
-              .format(entries_matching, entries_examined, entry.path), end='', flush=True)
-        os.makedirs(localpath, exist_ok=True)
-        # Try first with the default master branch.
-        url = "https://github.com/{}/archive/master.zip".format(entry.path)
+    while failures < max_failures:
         try:
-            outfile = wget.download(url, bar=None, out=localpath)
-        except Exception as e:
-            # If we get a 404 from GitHub, it may mean there is no "master".
-            # To find out what it really is, it costs an API call, so we don't
-            # do it unless we really have to.
-            if e.code == 404:
-                newurl = get_archive_url(entry.path)
-                try:
-                    outfile = wget.download(newurl, bar=None, out=localpath)
-                except Exception as newe:
-                    msg('Error attempting to download {}: {}'.format(entry.path, str(newe)))
-                    continue
-            else:
-                msg('Error attempting to download {}: {}'.format(entry.path, str(e)))
+            key = next(repo_iterator)
+            if key not in db:
+                msg('Unknown identifier #{}'.format(key))
                 continue
 
-        # Unzip it if we got it.
+            entry = db[key]
 
-        filesize = file_size(outfile)
-        try:
-            zipfile.ZipFile(outfile).extractall(localpath)
-            os.remove(outfile)
-        except Exception as e:
-            msg('{} left zipped: {}'.format(outfile, str(e)))
+            localpath = generate_path(downloads_root, entry)
+            if os.path.exists(localpath) and os.listdir(localpath):
+                # Skip it if we already have it.
+                msg('Already have #{} ({}/{})'.format(key, entry.owner, entry.name))
+                continue
+            count += 1
+
+            # Try first with the default master branch.
+            try:
+                url = "https://github.com/{}/{}/archive/master.zip".format(
+                    entry.owner, entry.name)
+                outfile = wget.download(url, bar=None, out=downloads_root)
+            except Exception as e:
+                # If we get a 404 from GitHub, it may mean there is no "master".
+                # To find out what it really is, it costs an API call, so we don't
+                # do it unless we really have to.
+                if e.code == 404:
+                    newurl = get_archive_url(entry.path)
+                    try:
+                        outfile = wget.download(newurl, bar=None, out=downloads_root)
+                    except Exception as newe:
+                        msg('Failed to download {}: {}'.format(entry.path, str(newe)))
+                        failures += 1
+                        continue
+                else:
+                    msg('Failed to download {}: {}'.format(entry.path, str(e)))
+                    failures += 1
+                    continue
+
+            # Unzip it to a temporary path, then move it to the final location.
+
+            filesize = file_size(outfile)
+            try:
+                zipfile.ZipFile(outfile).extractall(downloads_root)
+                os.remove(outfile)
+            except Exception as e:
+                msg('{} left zipped: {}'.format(outfile, str(e)))
+                failures += 1
+                continue
+
+            os.makedirs(os.path.dirname(localpath), exist_ok=True)
+            zipdir = outfile[0:outfile.rfind('.zip')]
+            os.rename(zipdir, localpath)
+
+            failures = 0
+            msg('{}/{} (#{} in {}, zip size {})'.format(
+                entry.owner, entry.name, key, localpath, filesize))
+            if count % 100 == 0:
+                msg('{} [{:2f}]'.format(count, time() - start))
+                start = time()
+        except StopIteration:
+            break
+        except Exception as err:
+            msg('Exception: {0}'.format(err))
             continue
-        msg(filesize)
-    db.close()
+
+    dbinterface.close()
     msg('')
     msg('Done.')
 
@@ -157,30 +184,20 @@ def get_archive_url(path):
         return None
 
 
-def make_path(dir, entry):
+def generate_path(root, entry):
     '''Creates a path of the following form:
-        dir/a/b/owner/path
-    where
-        dir   = the first argument
-        a     = the first character of the owner's name
-        b     = the second character of the owner's name
-        owner = the owner's name
-        path  = the path (really, the full name) of the repository on GitHub
-
-    If the owner's name has only 1 character, then the path is:
-        dir/a/@/path
-    where "@" is the literal character "@".  Since there can only be one
-    repository whose names have single characters (0, 1, 2, ..., a, b, c, ...)
-    then there can only be one 0/@, 1/@, 2/@, ..., a/@, b/@, etc., so the
-    contents of these directories are the repositories for that owner.
+        nn/nn/nn/nn
+    where n is an integer 0..9.  For example,
+        00/00/00/01
+        00/00/00/62
+        00/15/63/99
+    The full number read left to right (without the slashes) is the identifier
+    of the repository (which is the same as the database key in our database).
+    The numbers are zero-padded.  So for example, repository entry #7182480
+    leads to a path of "07/18/24/80".
     '''
-    subpath = entry.path[entry.path.find('/') + 1:]
-    first = entry.owner[0]
-    if len(entry.owner) == 1:           # Single-character owner name
-        return os.path.join(dir, first, '@', subpath)
-    else:                               # Multicharacter owner name
-        second = entry.owner[1]
-        return os.path.join(dir, first, second, entry.owner, subpath)
+    s = '{:08}'.format(entry.id)
+    return os.path.join(root, s[0:2], s[2:4], s[4:6], s[6:8])
 
 
 # Plac annotations for main function arguments
@@ -189,7 +206,9 @@ def make_path(dir, entry):
 # Plac automatically adds a -h argument for help, so no need to do it here.
 
 main.__annotations__ = dict(
-    dir = ('download directory root', 'option', 'd', str),
+    dir  = ('download directory root',                'option', 'd', str),
+    file = ('file containing repository identifiers', 'option', 'f'),
+    id   = ('(single) repository identifier',         'option', 'i'),
 )
 
 
