@@ -18,6 +18,7 @@ import plac
 import wget
 import humanize
 import zipfile
+import magic
 import locale
 import http
 import urllib
@@ -43,7 +44,7 @@ max_failures = 10
 # Currently this only does GitHub, but extending this to handle other hosts
 # should hopefully be possible.
 
-def main(downloads_root=default_download_dir, file=None, id=None):
+def main(downloads_root=default_download_dir, file=None, id=None, user_login=None):
     '''Downloads copies of respositories.'''
     if id:
         id_list = [int(id)]
@@ -53,11 +54,12 @@ def main(downloads_root=default_download_dir, file=None, id=None):
     else:
         msg('Need to provide a list of what to download')
         return
+    (login, password) = get_account_info(user_login)
     locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
-    download(downloads_root, id_list)
+    download(downloads_root, id_list, login, password)
 
 
-def download(downloads_root, id_list):
+def download(downloads_root, id_list, login, password):
     dbinterface = Database()
     db = dbinterface.open()
 
@@ -85,6 +87,7 @@ def download(downloads_root, id_list):
             count += 1
 
             # Try first with the default master branch.
+            outfile = None
             try:
                 url = "https://github.com/{}/{}/archive/master.zip".format(
                     entry.owner, entry.name)
@@ -94,12 +97,17 @@ def download(downloads_root, id_list):
                 # To find out what it really is, it costs an API call, so we don't
                 # do it unless we really have to.
                 if e.code == 404:
-                    newurl = get_archive_url(entry)
-                    try:
-                        outfile = wget.download(newurl, bar=None, out=downloads_root)
-                    except Exception as newe:
-                        msg('Failed to download {}: {}'.format(entry.id, str(newe)))
-                        failures += 1
+                    newurl = get_archive_url(entry, login, password)
+                    if newurl:
+                        try:
+                            outfile = wget.download(newurl, bar=None, out=downloads_root)
+                        except Exception as newe:
+                            msg('Failed to download {}: {}'.format(entry.id, str(newe)))
+                            failures += 1
+                            continue
+                    else:
+                        msg("Couldn't find download URL for #{} ({}/{})".format(
+                            entry.id, entry.owner, entry.name))
                         continue
                 else:
                     msg('Failed to download {}: {}'.format(entry.id, str(e)))
@@ -110,7 +118,7 @@ def download(downloads_root, id_list):
 
             filesize = file_size(outfile)
             try:
-                zipfile.ZipFile(outfile).extractall(downloads_root)
+                outdir = unzip_archive(outfile, downloads_root)
                 os.remove(outfile)
             except Exception as e:
                 msg('{} left zipped: {}'.format(outfile, str(e)))
@@ -118,8 +126,7 @@ def download(downloads_root, id_list):
                 continue
 
             os.makedirs(os.path.dirname(localpath), exist_ok=True)
-            zipdir = outfile[0:outfile.rfind('.zip')]
-            os.rename(zipdir, localpath)
+            os.rename(outdir, localpath)
 
             failures = 0
             msg('{}/{} (#{} in {}, zip size {})'.format(
@@ -147,21 +154,97 @@ def zip_file_exists(path, dir):
     return os.path.exists(dir + '/' + path + '/' + filename)
 
 
+def unzip_archive(file, dest):
+    # This only unzips what it guesses to be text files; for binary files,
+    # it only creates the file name but leaves out the content.  (This is
+    # our approach to saving disk space, because our analysis approach needs
+    # text only.)  It returns the path to the directory where of the contents.
+
+    zf = zipfile.ZipFile(file, 'r')
+    infolist = zf.infolist()
+    # The first item is the name of the root directory.
+    if infolist:
+        outdir = os.path.join(os.path.dirname(file), infolist[0].filename)
+    for component in infolist:
+        # zip files often cause problems on Linux because Linux file/dir
+        # names don't allow many character encodings.  I thought that setting
+        # the locale (see earlier in this file) would take care of that, but
+        # it didn't.  That's the reason for the encode/decode wonkiness here.
+        name = component.filename.encode('utf-8').decode('utf-8')
+        dir_name = os.path.join(dest, os.path.dirname(name))
+        full_path = os.path.join(dir_name, os.path.basename(name))
+
+        # Create missing directories.
+        try:
+            os.makedirs(dir_name)
+        except OSError as e:
+            if e.errno == os.errno.EEXIST:
+                pass
+            else:
+                raise
+        except Exception as e:
+            raise
+
+        # Write files.
+        try:
+            if not name.endswith('/'):
+                content = zf.read(component)
+                if probably_text(name, content):
+                    with open(full_path, 'wb') as fd:
+                        fd.write(content)
+                else:
+                    os.mknod(full_path)
+        except:
+            continue
+    zf.close()
+    return outdir
+
+def probably_text(filename, content):
+    if not content:
+        # Empty files are considered text.
+        return True
+    return (magic.from_buffer(content).decode("utf-8").find('text') >= 0)
+
+
 def file_size(path):
     return humanize.naturalsize(os.path.getsize(path))
 
 
-def get_archive_url(entry):
+def get_account_info(user_login=None):
     cfg = Config()
+    section = Host.name(Host.GITHUB)
     try:
-        login = cfg.get(Host.name(Host.GITHUB), 'login')
-        password = cfg.get(Host.name(Host.GITHUB), 'password')
+        if user_login:
+            for name, value in cfg.items(section):
+                if name.startswith('login') and value == user_login:
+                    login = user_login
+                    index = name[len('login'):]
+                    if index:
+                        password = cfg.get(section, 'password' + index)
+                    else:
+                        # login entry doesn't have an index number.
+                        # Might be a config file in the old format.
+                        password = value
+                    break
+            # If we get here, we failed to find the requested login.
+            msg('Cannot find "{}" in section {} of config.ini'.format(
+                user_login, section))
+        else:
+            try:
+                login = cfg.get(section, 'login1')
+                password = cfg.get(section, 'password1')
+            except:
+                login = cfg.get(section, 'login')
+                password = cfg.get(section, 'password')
     except Exception as err:
         msg(err)
         text = 'Failed to read "login" and/or "password" for {}'.format(
-            Host.name(Host.GITHUB))
+            section)
         raise SystemExit(text)
+    return (login, password)
 
+
+def get_archive_url(entry, login, password):
     auth = '{0}:{1}'.format(login, password)
     headers = {
         'User-Agent': login,
@@ -206,6 +289,7 @@ def generate_path(root, entry):
 # Plac automatically adds a -h argument for help, so no need to do it here.
 
 main.__annotations__ = dict(
+    user_login     = ('use specified account login',            'option', 'a', str),
     downloads_root = ('download directory root',                'option', 'd', str),
     file           = ('file containing repository identifiers', 'option', 'f'),
     id             = ('(single) repository identifier',         'option', 'i'),
