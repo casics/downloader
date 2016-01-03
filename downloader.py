@@ -206,9 +206,9 @@ def generate_path(root, entry):
 # Plac automatically adds a -h argument for help, so no need to do it here.
 
 main.__annotations__ = dict(
-    dir  = ('download directory root',                'option', 'd', str),
-    file = ('file containing repository identifiers', 'option', 'f'),
-    id   = ('(single) repository identifier',         'option', 'i'),
+    downloads_root = ('download directory root',                'option', 'd', str),
+    file           = ('file containing repository identifiers', 'option', 'f'),
+    id             = ('(single) repository identifier',         'option', 'i'),
 )
 
 
