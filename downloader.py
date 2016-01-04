@@ -143,8 +143,7 @@ def download(downloads_root, id_list, login, password):
 
         if failures >= max_failures:
             msg('Stopping because of too many repeated failures.')
-        else:
-            msg('Done.')
+            break
 
     dbinterface.close()
     msg('')
