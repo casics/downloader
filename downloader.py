@@ -66,7 +66,7 @@ def download(downloads_root, id_list, login, password):
     repo_iterator = iter(id_list)
     total = len(id_list)
 
-    msg('Downloading ...')
+    msg('Starting to download {} repos to {}'.format(total, downloads_root))
     count = 0
     failures = 0
     start = time()
@@ -83,10 +83,11 @@ def download(downloads_root, id_list, login, password):
             if os.path.exists(localpath) and os.listdir(localpath):
                 # Skip it if we already have it.
                 msg('Already have #{} ({}/{})'.format(key, entry.owner, entry.name))
+                failures = 0
                 continue
-            count += 1
 
             # Try first with the default master branch.
+            count += 1
             outfile = None
             try:
                 url = "https://github.com/{}/{}/archive/master.zip".format(
@@ -128,17 +129,22 @@ def download(downloads_root, id_list, login, password):
             os.makedirs(os.path.dirname(localpath), exist_ok=True)
             os.rename(outdir, localpath)
 
-            failures = 0
             msg('{}/{} (#{} in {}, zip size {})'.format(
                 entry.owner, entry.name, key, localpath, filesize))
             if count % 100 == 0:
                 msg('{} [{:2f}]'.format(count, time() - start))
                 start = time()
+            failures = 0
         except StopIteration:
             break
         except Exception as err:
             msg('Exception: {0}'.format(err))
             continue
+
+        if failures >= max_failures:
+            msg('Stopping because of too many repeated failures.')
+        else:
+            msg('Done.')
 
     dbinterface.close()
     msg('')
