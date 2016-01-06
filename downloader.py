@@ -66,7 +66,11 @@ def download(downloads_root, id_list, login, password):
     repo_iterator = iter(id_list)
     total = len(id_list)
 
+    downloads_tmp = os.path.join(downloads_root, 'tmp')
+    os.makedirs(downloads_tmp, exist_ok=True)
+
     msg('Starting to download {} repos to {}'.format(total, downloads_root))
+    msg('Using temporary directory in {}'.format(downloads_tmp))
     count = 0
     failures = 0
     start = time()
@@ -92,7 +96,7 @@ def download(downloads_root, id_list, login, password):
             try:
                 url = "https://github.com/{}/{}/archive/master.zip".format(
                     entry.owner, entry.name)
-                outfile = wget.download(url, bar=None, out=downloads_root)
+                outfile = wget.download(url, bar=None, out=downloads_tmp)
             except Exception as e:
                 # If we get a 404 from GitHub, it may mean there is no "master".
                 # To find out what it really is, it costs an API call, so we don't
@@ -101,7 +105,7 @@ def download(downloads_root, id_list, login, password):
                     newurl = get_archive_url(entry, login, password)
                     if newurl:
                         try:
-                            outfile = wget.download(newurl, bar=None, out=downloads_root)
+                            outfile = wget.download(newurl, bar=None, out=downloads_tmp)
                         except Exception as newe:
                             msg('Failed to download {}: {}'.format(entry.id, str(newe)))
                             failures += 1
@@ -119,7 +123,7 @@ def download(downloads_root, id_list, login, password):
 
             filesize = file_size(outfile)
             try:
-                outdir = unzip_archive(outfile, downloads_root)
+                outdir = unzip_archive(outfile, downloads_tmp)
                 os.remove(outfile)
             except Exception as e:
                 msg('{} left zipped: {}'.format(outfile, str(e)))
