@@ -23,6 +23,7 @@ import locale
 import http
 import urllib
 import shutil
+import datetime
 from base64 import b64encode
 from time import time
 
@@ -133,8 +134,9 @@ def download(downloads_root, id_list, login, password):
             os.makedirs(os.path.dirname(localpath), exist_ok=True)
             os.rename(outdir, localpath)
 
-            msg('{}/{} (#{} in {}, zip size {})'.format(
-                entry.owner, entry.name, key, localpath, filesize))
+            now = datetime.now().strftime("%Y-%m-%d %H:%M")
+            msg('{}/{} (#{} in {}, zip size {}, finished at {})'.format(
+                entry.owner, entry.name, key, localpath, filesize, now))
             if count % 100 == 0:
                 msg('{} [{:2f}]'.format(count, time() - start))
                 start = time()
