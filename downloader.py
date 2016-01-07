@@ -22,6 +22,7 @@ import magic
 import locale
 import http
 import urllib
+import requests
 import shutil
 import datetime
 from base64 import b64encode
@@ -100,10 +101,10 @@ def download(downloads_root, id_list, login, password):
                 outfile = wget.download(url, bar=None, out=downloads_tmp)
             except Exception as e:
                 # If we get a 404 from GitHub, it may mean there is no "master".
-                # To find out what it really is, it costs an API call, so we don't
-                # do it unless we really have to.
+                # To find out what it really is, we first try scraping the web
+                # page, and if that fails, we resort to using an API call.
                 if e.code == 404:
-                    newurl = get_archive_url(entry, login, password)
+                    newurl = get_archive_url_by_scraping(entry)
                     if newurl:
                         try:
                             outfile = wget.download(newurl, bar=None, out=downloads_tmp)
@@ -112,9 +113,18 @@ def download(downloads_root, id_list, login, password):
                             failures += 1
                             continue
                     else:
-                        msg("Couldn't find download URL for #{} ({}/{})".format(
-                            entry.id, entry.owner, entry.name))
-                        continue
+                        newurl = get_archive_url_by_api(entry, login, password)
+                        if newurl:
+                            try:
+                                outfile = wget.download(newurl, bar=None, out=downloads_tmp)
+                            except Exception as newe:
+                                msg('Failed to download {}: {}'.format(entry.id, str(newe)))
+                                failures += 1
+                                continue
+                        else:
+                            msg("Couldn't find download URL for #{} ({}/{})".format(
+                                entry.id, entry.owner, entry.name))
+                            continue
                 else:
                     msg('Failed to download {}: {}'.format(entry.id, str(e)))
                     failures += 1
@@ -255,7 +265,29 @@ def get_account_info(user_login=None):
     return (login, password)
 
 
-def get_archive_url(entry, login, password):
+def get_home_page_text(entry):
+    url = 'http://github.com/' + entry.owner + '/' + entry.name
+    r = requests.get(url)
+    return r.text if r.status_code == 200 else None
+
+
+def get_archive_url_by_scraping(entry):
+    html = get_home_page_text(entry)
+    if not html:
+        return None
+    regionstart = html.find('<div class="file-navigation-option">')
+    if regionstart < 1:
+        return None
+    regionend = html.find('Download ZIP', regionstart)
+    pathstart = html.find('<a href="', regionstart, regionend)
+    if not pathstart:
+        return None
+    pathstartlen = len('<a href="')
+    pathend = html.find('"', pathstart + pathstartlen)
+    return 'http://github.com/' + html[pathstart + pathstartlen + 1 : pathend]
+
+
+def get_archive_url_by_api(entry, login, password):
     auth = '{0}:{1}'.format(login, password)
     headers = {
         'User-Agent': login,
