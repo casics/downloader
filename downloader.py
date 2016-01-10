@@ -196,7 +196,7 @@ def unzip_archive(file, dest):
         full_path = os.path.join(dir_name, os.path.basename(name))
 
         # Create missing directories.
-        os.makedirs(dir_name, exists_ok=True)
+        os.makedirs(dir_name, exist_ok=True)
 
         # Write files.
         try:
