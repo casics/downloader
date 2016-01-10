@@ -49,12 +49,12 @@ max_failures = 10
 def main(downloads_root=default_download_dir, file=None, id=None, user_login=None):
     '''Downloads copies of respositories.'''
     if id:
-        id_list = [int(id)]
+        id_list = [int(x) for x in id.split(',')]
     elif file:
         with open(file) as f:
             id_list = [int(x) for x in f.read().splitlines()]
     else:
-        msg('Need to provide a list of what to download')
+        msg('Need to provide identifiers of repositories to be downloaded')
         return
     (login, password) = get_account_info(user_login)
     locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
@@ -328,7 +328,7 @@ main.__annotations__ = dict(
     user_login     = ('use specified account login',            'option', 'a', str),
     downloads_root = ('download directory root',                'option', 'd', str),
     file           = ('file containing repository identifiers', 'option', 'f'),
-    id             = ('(single) repository identifier',         'option', 'i'),
+    id             = ('comma-separated list of repository ids', 'option', 'i'),
 )
 
 
