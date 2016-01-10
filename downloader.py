@@ -196,15 +196,7 @@ def unzip_archive(file, dest):
         full_path = os.path.join(dir_name, os.path.basename(name))
 
         # Create missing directories.
-        try:
-            os.makedirs(dir_name)
-        except OSError as e:
-            if e.errno == os.errno.EEXIST:
-                pass
-            else:
-                raise
-        except Exception as e:
-            raise
+        os.makedirs(dir_name, exists_ok=True)
 
         # Write files.
         try:
@@ -219,6 +211,7 @@ def unzip_archive(file, dest):
             continue
     zf.close()
     return outdir
+
 
 def probably_text(filename, content):
     if not content:
