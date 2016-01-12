@@ -28,10 +28,11 @@ import datetime
 from base64 import b64encode
 from time import time
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "../common"))
-from dbinterface import *
-from utils import *
-from reporecord import *
+if __name__ == '__main__' and __package__ is None:
+    sys.path.append(os.path.join(os.path.dirname(__file__), "../common"))
+    from utils import *
+    from reporecord import *
+    from dbinterface import *
 
 
 # Globals
