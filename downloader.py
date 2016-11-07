@@ -1,7 +1,7 @@
 #!/usr/bin/env python3.4
 #
-# @file    convert-db.py
-# @brief   Convert database to new record format
+# @file    download.py
+# @brief   Download source code for repos
 # @author  Michael Hucka
 #
 # <!---------------------------------------------------------------------------
@@ -10,12 +10,12 @@
 # Inventory Creation System.  For more information, visit http://casics.org.
 # ------------------------------------------------------------------------- -->
 
-import pdb
 import sys
 import os
 import errno
 import plac
 import wget
+import github3
 import humanize
 import zipfile
 import magic
@@ -28,11 +28,12 @@ import datetime
 from base64 import b64encode
 from time import time
 
-if __name__ == '__main__' and __package__ is None:
-    sys.path.append(os.path.join(os.path.dirname(__file__), "../common"))
-    from utils import *
-    from reporecord import *
-    from dbinterface import *
+sys.path.append('../database')
+sys.path.append('../comment')
+
+from casicsdb import *
+from utils import *
+from github import *
 
 
 # Globals
@@ -47,7 +48,7 @@ max_failures = 10
 # Currently this only does GitHub, but extending this to handle other hosts
 # should hopefully be possible.
 
-def main(downloads_root=default_download_dir, file=None, id=None, user_login=None):
+def main(downloads_root=default_download_dir, file=None, id=None, username=None):
     '''Downloads copies of respositories.'''
     if id:
         id_list = [int(x) for x in id.split(',')]
@@ -57,124 +58,135 @@ def main(downloads_root=default_download_dir, file=None, id=None, user_login=Non
     else:
         msg('Need to provide identifiers of repositories to be downloaded')
         return
-    (login, password) = get_account_info(user_login)
+    (user, password) = GitHub.login('github', username)
     locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
-    download(downloads_root, id_list, login, password)
+    get_sources(downloads_root, id_list, user, password)
 
 
-def download(downloads_root, id_list, login, password):
-    dbinterface = Database()
-    db = dbinterface.open()
-
-    repo_iterator = iter(id_list)
-    total = len(id_list)
+def get_sources(downloads_root, id_list, user, password):
+    casicsdb  = CasicsDB()
+    github_db = casicsdb.open('github')
+    repos     = github_db.repos
 
     downloads_tmp = os.path.join(downloads_root, 'tmp')
     os.makedirs(downloads_tmp, exist_ok=True)
 
-    msg('Starting to download {} repos to {}'.format(total, downloads_root))
+    msg('Downloading {} repos to {}'.format(len(id_list), downloads_root))
     msg('Using temporary directory in {}'.format(downloads_tmp))
+
+    fields = dict.fromkeys(['owner', 'name', 'default_branch'], 1)
+
     count = 0
     failures = 0
+    retry_after_max_failures = True
     start = time()
-    while failures < max_failures:
-        try:
-            key = next(repo_iterator)
-            if key not in db:
-                msg('Unknown identifier #{}'.format(key))
-                continue
-
-            entry = db[key]
-
-            localpath = generate_path(downloads_root, entry)
-            if os.path.exists(localpath) and os.listdir(localpath):
-                # Skip it if we already have it.
-                msg('Already have #{} ({}/{})'.format(key, entry.owner, entry.name))
+    for id in iter(id_list):
+        retry = True
+        while retry and failures < max_failures:
+            # Don't retry unless the problem may be transient.
+            retry = False
+            entry = repos.find_one({'_id': id}, fields)
+            if not entry:
+                msg('*** skipping unknown GitHub id {}'.format(id))
+            try:
+                download(entry, downloads_tmp, downloads_root, user, password)
                 failures = 0
-                continue
-
-            # Try first with the default master branch.
-            count += 1
-            outfile = None
-            try:
-                url = "https://github.com/{}/{}/archive/master.zip".format(
-                    entry.owner, entry.name)
-                outfile = wget.download(url, bar=None, out=downloads_tmp)
-            except Exception as e:
-                # If we get a 404 from GitHub, it may mean there is no "master".
-                # To find out what it really is, we first try scraping the web
-                # page, and if that fails, we resort to using an API call.
-                if e.code == 404:
-                    newurl = get_archive_url_by_scraping(entry)
-                    if newurl:
-                        try:
-                            outfile = wget.download(newurl, bar=None, out=downloads_tmp)
-                        except Exception as newe:
-                            msg('Failed to download {}: {}'.format(entry.id, str(newe)))
-                            failures += 1
-                            continue
-                    else:
-                        newurl = get_archive_url_by_api(entry, login, password)
-                        if newurl:
-                            try:
-                                outfile = wget.download(newurl, bar=None, out=downloads_tmp)
-                            except Exception as newe:
-                                msg('Failed to download {}: {}'.format(entry.id, str(newe)))
-                                failures += 1
-                                continue
-                        else:
-                            msg("Couldn't find download URL for #{} ({}/{})".format(
-                                entry.id, entry.owner, entry.name))
-                            continue
-                else:
-                    msg('Failed to download {}: {}'.format(entry.id, str(e)))
-                    failures += 1
-                    continue
-
-            # Unzip it to a temporary path, then move it to the final location.
-
-            filesize = file_size(outfile)
-            try:
-                outdir = unzip_archive(outfile, downloads_tmp)
-                os.remove(outfile)
-            except Exception as e:
-                msg('{} left zipped: {}'.format(outfile, str(e)))
+            except StopIteration:
+                msg('Iterator reports it is done')
+                break
+            except Exception as err:
+                msg('*** Exception for {} -- skipping it -- {}'.format(
+                    e_summary(entry), err))
+                # Something unexpected.  Don't retry this entry, but count
+                # this failure in case we're up against a roadblock.
                 failures += 1
-                continue
-
-            os.makedirs(os.path.dirname(localpath), exist_ok=True)
-            os.rename(outdir, localpath)
-
-            now = datetime.now().strftime("%Y-%m-%d %H:%M")
-            msg('{}/{} (#{} in {}, zip size {}, finished at {})'.format(
-                entry.owner, entry.name, key, localpath, filesize, now))
-            if count % 100 == 0:
-                msg('{} [{:2f}]'.format(count, time() - start))
-                start = time()
-            failures = 0
-        except StopIteration:
-            break
-        except Exception as err:
-            msg('Exception: {0}'.format(err))
-            continue
 
         if failures >= max_failures:
-            msg('Stopping because of too many repeated failures.')
-            break
-
-    dbinterface.close()
+            # Pause & continue once, in case of transient network issues.
+            if retry_after_max_failures:
+                msg('*** Pausing because of too many consecutive failures')
+                sleep(120)
+                failures = 0
+                retry_after_max_failures = False
+            else:
+                # We've already paused & restarted once.
+                msg('*** Stopping because of too many consecutive failures')
+                break
+        count += 1
+        if count % 100 == 0:
+            msg('{} [{:2f}]'.format(count, time() - start))
+            start = time()
     msg('')
     msg('Done.')
 
 
+def download(entry, downloads_tmp, downloads_root, user, password):
+    localpath = generate_path(downloads_root, entry)
+    if os.path.exists(localpath) and os.listdir(localpath):
+        # Skip it if we already have it.
+        msg('already have {} -- skipping'.format(e_summary(entry)))
+        failures = 0
+        return
+
+    # Try first with the default master branch.
+    outfile = None
+    try:
+        url = "https://github.com/{}/{}/archive/{}.zip".format(
+            entry['owner'], entry['name'], entry['default_branch'])
+        outfile = wget.download(url, bar=None, out=downloads_tmp)
+    except Exception as e:
+        # If we get a 404 from GitHub, it may mean there is no zip file for
+        # what we think is the default branch.  To find out what it really
+        # is, we first try scraping the web page, and if that fails, we
+        # resort to using an API call.
+        if e.code == 404:
+            newurl = get_archive_url_by_scraping(entry)
+            if newurl:
+                try:
+                    outfile = wget.download(newurl, bar=None, out=downloads_tmp)
+                except Exception as newe:
+                    msg('*** failed to download {}: {}'.format(entry['_id'], str(newe)))
+                    failures += 1
+                    return
+            else:
+                newurl = get_archive_url_by_api(entry, user, password)
+                if newurl:
+                    try:
+                        outfile = wget.download(newurl, bar=None, out=downloads_tmp)
+                    except Exception as newe:
+                        msg('*** failed to download {}: {}'.format(entry['_id'], str(newe)))
+                        failures += 1
+                        return
+                else:
+                    msg("*** can't find download URL for {}, branch '{}'".format(
+                        e_summary(entry), entry['default_branch']))
+                    return
+        else:
+            msg('*** failed to download {}: {}'.format(entry['_id'], str(e)))
+            failures += 1
+            return
+
+    # Unzip it to a temporary path, then move it to the final location.
+
+    filesize = file_size(outfile)
+    try:
+        outdir = unzip_archive(outfile, downloads_tmp)
+        os.remove(outfile)
+    except Exception as e:
+        msg('{} left zipped: {}'.format(outfile, str(e)))
+        failures += 1
+        return
+
+    os.makedirs(os.path.dirname(localpath), exist_ok=True)
+    os.rename(outdir, localpath)
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    msg('{} --> {}, zip size {}, finished at {}'.format(
+        e_summary(entry), localpath, filesize, now))
+
+
 # Helpers
 # .............................................................................
-
-def zip_file_exists(path, dir):
-    # This is the path that GitHub creates for zip files
-    filename = path[path.rfind('/') + 1 :] + '-master.zip'
-    return os.path.exists(dir + '/' + path + '/' + filename)
-
 
 def unzip_archive(file, dest):
     # This only unzips what it guesses to be text files; for binary files,
@@ -225,42 +237,8 @@ def file_size(path):
     return humanize.naturalsize(os.path.getsize(path))
 
 
-def get_account_info(user_login=None):
-    cfg = Config()
-    section = Host.name(Host.GITHUB)
-    try:
-        if user_login:
-            for name, value in cfg.items(section):
-                if name.startswith('login') and value == user_login:
-                    login = user_login
-                    index = name[len('login'):]
-                    if index:
-                        password = cfg.get(section, 'password' + index)
-                    else:
-                        # login entry doesn't have an index number.
-                        # Might be a config file in the old format.
-                        password = value
-                    break
-            # If we get here, we failed to find the requested login.
-            msg('Cannot find "{}" in section {} of config.ini'.format(
-                user_login, section))
-        else:
-            try:
-                login = cfg.get(section, 'login1')
-                password = cfg.get(section, 'password1')
-            except:
-                login = cfg.get(section, 'login')
-                password = cfg.get(section, 'password')
-    except Exception as err:
-        msg(err)
-        text = 'Failed to read "login" and/or "password" for {}'.format(
-            section)
-        raise SystemExit(text)
-    return (login, password)
-
-
 def get_home_page_text(entry):
-    url = 'http://github.com/' + entry.owner + '/' + entry.name
+    url = 'http://github.com/' + entry['owner'] + '/' + entry['name']
     r = requests.get(url)
     return r.text if r.status_code == 200 else None
 
@@ -281,14 +259,15 @@ def get_archive_url_by_scraping(entry):
     return 'http://github.com/' + html[pathstart + pathstartlen + 1 : pathend]
 
 
-def get_archive_url_by_api(entry, login, password):
-    auth = '{0}:{1}'.format(login, password)
+def get_archive_url_by_api(entry, user, password):
+    auth = '{0}:{1}'.format(user, password)
     headers = {
-        'User-Agent': login,
+        'User-Agent': user,
         'Authorization': 'Basic ' + b64encode(bytes(auth, 'ascii')).decode('ascii'),
         'Accept': 'application/vnd.github.v3.raw',
     }
-    url = "https://api.github.com/repos/{}/{}/zipball".format(entry.owner, entry.name)
+    url = "https://api.github.com/repos/{}/{}/zipball".format(
+        entry['owner'], entry['name'])
 
     conn = http.client.HTTPSConnection("api.github.com")
     conn.request("GET", url, {}, headers)
@@ -316,7 +295,7 @@ def generate_path(root, entry):
     The numbers are zero-padded.  So for example, repository entry #7182480
     leads to a path of "07/18/24/80".
     '''
-    s = '{:08}'.format(entry.id)
+    s = '{:08}'.format(entry['_id'])
     return os.path.join(root, s[0:2], s[2:4], s[4:6], s[6:8])
 
 
@@ -326,7 +305,7 @@ def generate_path(root, entry):
 # Plac automatically adds a -h argument for help, so no need to do it here.
 
 main.__annotations__ = dict(
-    user_login     = ('use specified account login',            'option', 'a', str),
+    username       = ('use specified account user name',        'option', 'a', str),
     downloads_root = ('download directory root',                'option', 'd', str),
     file           = ('file containing repository identifiers', 'option', 'f'),
     id             = ('comma-separated list of repository ids', 'option', 'i'),
