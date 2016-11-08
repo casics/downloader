@@ -230,7 +230,7 @@ def probably_text(filename, content):
     if not content:
         # Empty files are considered text.
         return True
-    return (magic.from_buffer(content).decode("utf-8").find('text') >= 0)
+    return (magic.from_buffer(content).find('text') >= 0)
 
 
 def file_size(path):
