@@ -88,17 +88,9 @@ def get_sources(downloads_root, id_list, user, password):
             entry = repos.find_one({'_id': id}, fields)
             if not entry:
                 msg('*** skipping unknown GitHub id {}'.format(id))
-            try:
-                download(entry, downloads_tmp, downloads_root, user, password)
+            if download(entry, downloads_tmp, downloads_root, user, password):
                 failures = 0
-            except StopIteration:
-                msg('Iterator reports it is done')
-                break
-            except Exception as err:
-                msg('*** Exception for {} -- skipping it -- {}'.format(
-                    e_summary(entry), err))
-                # Something unexpected.  Don't retry this entry, but count
-                # this failure in case we're up against a roadblock.
+            else:
                 failures += 1
 
         if failures >= max_failures:
@@ -125,8 +117,7 @@ def download(entry, downloads_tmp, downloads_root, user, password):
     if os.path.exists(localpath) and os.listdir(localpath):
         # Skip it if we already have it.
         msg('already have {} -- skipping'.format(e_summary(entry)))
-        failures = 0
-        return
+        return True
 
     # Try first with the default master branch.
     outfile = None
@@ -146,8 +137,7 @@ def download(entry, downloads_tmp, downloads_root, user, password):
                     outfile = wget.download(newurl, bar=None, out=downloads_tmp)
                 except Exception as newe:
                     msg('*** failed to download {}: {}'.format(entry['_id'], str(newe)))
-                    failures += 1
-                    return
+                    return False
             else:
                 newurl = get_archive_url_by_api(entry, user, password)
                 if newurl:
@@ -155,16 +145,14 @@ def download(entry, downloads_tmp, downloads_root, user, password):
                         outfile = wget.download(newurl, bar=None, out=downloads_tmp)
                     except Exception as newe:
                         msg('*** failed to download {}: {}'.format(entry['_id'], str(newe)))
-                        failures += 1
-                        return
+                        return False
                 else:
                     msg("*** can't find download URL for {}, branch '{}'".format(
                         e_summary(entry), entry['default_branch']))
-                    return
+                    return False
         else:
             msg('*** failed to download {}: {}'.format(entry['_id'], str(e)))
-            failures += 1
-            return
+            return False
 
     # Unzip it to a temporary path, then move it to the final location.
 
@@ -174,8 +162,7 @@ def download(entry, downloads_tmp, downloads_root, user, password):
         os.remove(outfile)
     except Exception as e:
         msg('{} left zipped: {}'.format(outfile, str(e)))
-        failures += 1
-        return
+        return False
 
     os.makedirs(os.path.dirname(localpath), exist_ok=True)
     os.rename(outdir, localpath)
@@ -183,6 +170,7 @@ def download(entry, downloads_tmp, downloads_root, user, password):
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     msg('{} --> {}, zip size {}, finished at {}'.format(
         e_summary(entry), localpath, filesize, now))
+    return True
 
 
 # Helpers
