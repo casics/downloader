@@ -121,10 +121,11 @@ def download(entry, downloads_tmp, downloads_root, user, password):
 
     # Try first with the default master branch.
     outfile = None
+    import ipdb; ipdb.set_trace()
     try:
         url = "https://github.com/{}/{}/archive/{}.zip".format(
             entry['owner'], entry['name'], entry['default_branch'])
-        return wget.download(url, bar=None, out=downloads_tmp)
+        outfile = wget.download(url, bar=None, out=downloads_tmp)
     except Exception as e:
         # If we get a 404 from GitHub, it may mean there is no zip file for
         # what we think is the default branch.  To find out what it really
