@@ -124,13 +124,15 @@ def download(entry, downloads_tmp, downloads_root, user, password):
     try:
         url = "https://github.com/{}/{}/archive/{}.zip".format(
             entry['owner'], entry['name'], entry['default_branch'])
-        outfile = wget.download(url, bar=None, out=downloads_tmp)
+        return wget.download(url, bar=None, out=downloads_tmp)
     except Exception as e:
         # If we get a 404 from GitHub, it may mean there is no zip file for
         # what we think is the default branch.  To find out what it really
         # is, we first try scraping the web page, and if that fails, we
         # resort to using an API call.
-        if e.code == 404:
+        if hasattr(e, 'code') and e.code == 404:
+            msg('no zip file for branch {} of {} -- looking at alternatives'
+                .format(entry['default_branch'], e_summary(entry)))
             newurl = get_archive_url_by_scraping(entry)
             if newurl:
                 try:
