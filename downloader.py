@@ -121,7 +121,6 @@ def download(entry, downloads_tmp, downloads_root, user, password):
 
     # Try first with the default master branch.
     outfile = None
-    import ipdb; ipdb.set_trace()
     try:
         url = "https://github.com/{}/{}/archive/{}.zip".format(
             entry['owner'], entry['name'], entry['default_branch'])
@@ -195,7 +194,7 @@ def unzip_archive(file, dest):
         # names don't allow many character encodings.  I thought that setting
         # the locale (see earlier in this file) would take care of that, but
         # it didn't.  That's the reason for the encode/decode wonkiness here.
-        name = component.filename.encode('utf-8').decode('utf-8')
+        name = component.filename.encode('utf-8', 'ignore').decode('ascii', 'ignore')
         dir_name = os.path.join(dest, os.path.dirname(name))
         full_path = os.path.join(dir_name, os.path.basename(name))
 
@@ -213,6 +212,7 @@ def unzip_archive(file, dest):
                     os.mknod(full_path)
         except:
             continue
+
     zf.close()
     return outdir
 
