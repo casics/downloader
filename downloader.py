@@ -26,7 +26,7 @@ import requests
 import shutil
 import datetime
 from base64 import b64encode
-from time import time
+from time import time, sleep
 
 sys.path.append('../database')
 sys.path.append('../comment')
