@@ -41,7 +41,7 @@ from github import *
 
 default_download_dir = "downloads"
 max_failures = 10
-
+max_retries  = 3
 
 # Main body.
 # .............................................................................
@@ -78,7 +78,7 @@ def get_sources(downloads_root, id_list, user, password):
 
     count = 0
     failures = 0
-    retry_after_max_failures = True
+    retries = 0
     start = time()
     for id in iter(id_list):
         retry = True
@@ -94,14 +94,14 @@ def get_sources(downloads_root, id_list, user, password):
                 failures += 1
 
         if failures >= max_failures:
-            # Pause & continue once, in case of transient network issues.
-            if retry_after_max_failures:
+            # Try pause & continue in case of transient network issues.
+            if retries <= max_retries:
+                retries += 1
                 msg('*** Pausing because of too many consecutive failures')
-                sleep(120)
+                sleep(300 * retries)
                 failures = 0
-                retry_after_max_failures = False
             else:
-                # We've already paused & restarted once.
+                # We've already paused & restarted.
                 msg('*** Stopping because of too many consecutive failures')
                 break
         count += 1
