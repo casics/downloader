@@ -113,7 +113,7 @@ def get_sources(downloads_root, id_list, user, password):
 
 
 def download(entry, downloads_tmp, downloads_root, user, password):
-    localpath = generate_path(downloads_root, entry)
+    localpath = generate_path(downloads_root, entry['_id'])
     if os.path.exists(localpath) and os.listdir(localpath):
         # Skip it if we already have it.
         msg('already have {} -- skipping'.format(e_summary(entry)))
@@ -272,22 +272,6 @@ def get_archive_url_by_api(entry, user, password):
         return response.readall().decode('utf-8')
     else:
         return None
-
-
-def generate_path(root, entry):
-    '''Creates a path of the following form:
-        nn/nn/nn/nn
-    where n is an integer 0..9.  For example,
-        00/00/00/01
-        00/00/00/62
-        00/15/63/99
-    The full number read left to right (without the slashes) is the identifier
-    of the repository (which is the same as the database key in our database).
-    The numbers are zero-padded.  So for example, repository entry #7182480
-    leads to a path of "07/18/24/80".
-    '''
-    s = '{:08}'.format(entry['_id'])
-    return os.path.join(root, s[0:2], s[2:4], s[4:6], s[6:8])
 
 
 # Plac annotations for main function arguments
