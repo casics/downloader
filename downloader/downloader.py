@@ -1,78 +1,169 @@
-#!/usr/bin/env python3.4
-#
-# @file    download.py
-# @brief   Download source code for repos
-# @author  Michael Hucka
-#
-# <!---------------------------------------------------------------------------
-# Copyright (C) 2015 by the California Institute of Technology.
-# This software is part of CASICS, the Comprehensive and Automated Software
-# Inventory Creation System.  For more information, visit http://casics.org.
-# ------------------------------------------------------------------------- -->
+#!/usr/bin/env python3
+'''
+downloader: download copies of repositories to local file system
 
-import sys
-import os
+This module contacts the CASICS server to get information about one or more
+specified repositories, then downloads a copy of those repositories to the
+local file system.
+'''
+
+__version__ = '1.0.0'
+__author__  = 'Michael Hucka <mhucka@caltech.edu>'
+__email__   = 'mhucka@caltech.edu'
+__license__ = 'GPLv3'
+
+from   base64 import b64encode
+from   datetime import datetime
 import errno
-import plac
-import wget
 import github3
-import humanize
-import zipfile
-import magic
-import locale
+from   halo import Halo
 import http
-import urllib
+import humanize
+import locale
+import magic
+import os
+import plac
+from   pymongo import MongoClient
 import requests
 import shutil
-import datetime
-from base64 import b64encode
-from time import time, sleep
+import sys
+import urllib
+from   time import time, sleep
+import wget
+import zipfile
 
-sys.path.append('../database')
-sys.path.append('../comment')
+sys.path.append('..')
 
-from casicsdb import *
-from utils import *
-from github import *
+from common.casics import *
+from common.messages import *
+from common.credentials import *
 
-
-# Globals
+# Global constants.
 # .............................................................................
 
-default_download_dir = "downloads"
-max_failures = 10
-max_retries  = 3
+_CONN_TIMEOUT = 5000
+'''Time to wait for connection to databases, in milliseconds.'''
+
+_MAX_FAILURES = 10
+'''Total number of failures allowed before we pause.'''
+
+_MAX_RETRIES  = 3
+'''Number of times we pause & retry after hitting the failure limit.'''
+
+# GitHub defaults.
+
+_GITHUB_KEYRING = 'org.casics.github'
+
+# CASICS database defaults.
+
+_CASICS_DEFAULT_HOST = 'localhost'
+'''Default network host for CASICS server if no explicit host is given.'''
+
+_CASICS_DEFAULT_PORT = 27017
+'''Default network port for CASICS server if no explicit port number is given.'''
+
+_CASICS_DB_NAME = 'github'
+'''The name of the CASICS database.'''
+
+_CASICS_KEYRING = "org.casics.casics"
+'''The name of the keyring entry for LoCTerms client users.'''
 
 # Main body.
 # .............................................................................
 # Currently this only does GitHub, but extending this to handle other hosts
 # should hopefully be possible.
 
-def main(downloads_root=default_download_dir, file=None, id=None, username=None):
-    '''Downloads copies of respositories.'''
+def main(root=None, file=None, id=None, nokeyring=False, nofrills=False,
+         casics_user=None, casics_pswd=None, casics_host=None, casics_port=None,
+         github_user=None, github_pswd=None):
+    '''Download copies of repositories to local file system.
+
+This module contacts the CASICS server to get information about one or more
+specified repositories, then downloads a copy of those repositories to the
+local file system.  The option `-r` is required, and one of the options `-f`
+or `-i` must also be given.  Basic usage:
+
+    downloader -r /path/to/downloads/root -f file-of-repo-identifiers.txt
+or
+    downloader -r /path/to/downloads/root -i ID,ID,ID,...
+
+If a file of repository identifiers is given with `-f`, the file must have one
+repository numeric identifier per line.  If a list of identifiers is given
+with `-i` on the command line, it should be one or more numeric identifiers
+separated by commas with no spaces between them.
+
+By default, this uses the operating system's keyring/keychain functionality
+to get the user name and password needed to access both the CASICS database
+server and GitHub over the network.  If no such credentials are found, it
+will query the user interactively for the user name and password for each
+system separately (so, two sets), and then store them in the keyring/keychain
+(unless the -X argument is given) so that it does not have to ask again in
+the future.  It is also possible to supply user names and passwords directly
+using command line arguments, but this is discouraged because it is insecure
+on multiuser computer systems. (Other users could run "ps" in the background
+and see your credentials).
+
+Additional arguments can be used to specify the host and port on which the
+CASICS database.
+
+The output will use spinners and color, unless the no-frills option `-Y` is
+given.'''
+    # Dealing with negated variables is confusing, so turn them around.
+    keyring = not nokeyring
+    showprogress = not nofrills
+    colorize = 'termcolor' in sys.modules and not nofrills
+
+    # Check arguments.
+    if not root:
+        raise SystemExit(colorcode('Need root of directory where downloads should go.',
+                                   'error', colorize))
+    elif not os.path.exists(root):
+        raise SystemExit(colorcode('"{}" does not exist.'.format(root),
+                                   'error', colorize))
+    elif not os.path.isdir(root):
+        raise SystemExit(colorcode('"{}" is not a directory.'.format(root),
+                                   'error', colorize))
+
     if id:
         id_list = [int(x) for x in id.split(',')]
     elif file:
         with open(file) as f:
             id_list = [int(x) for x in f.read().splitlines()]
     else:
-        msg('Need to provide identifiers of repositories to be downloaded')
-        return
-    (user, password) = GitHub.login('github', username)
+        raise SystemExit(colorcode('Need identifiers of repositories to be downloaded.',
+                                   'error', colorize))
+
+    if not (casics_user and casics_pswd and casics_host and casics_port):
+        (casics_user, casics_pswd, casics_host, casics_port) = obtain_credentials(
+            _CASICS_KEYRING, "CASICS", casics_user, casics_pswd, casics_host,
+            casics_port, _CASICS_DEFAULT_HOST, _CASICS_DEFAULT_PORT)
+    if not (github_user and github_pswd):
+        (github_user, github_pswd, _, _) = obtain_credentials(
+            _GITHUB_KEYRING, "GitHub", github_user, github_pswd, -1, -1)
+    if keyring:
+        # Save the credentials if they're different from what's saved.
+        (s_user, s_pswd, s_host, s_port) = get_keyring_credentials(_CASICS_KEYRING)
+        if s_user != casics_user or s_pswd != casics_pswd or \
+           s_host != casics_host or s_port != casics_port:
+            save_keyring_credentials(_CASICS_KEYRING, casics_user, casics_pswd,
+                                     casics_host, casics_port)
+        (s_user, s_pswd, _, _) = get_keyring_credentials(_GITHUB_KEYRING)
+        if s_user != github_user or s_pswd != github_pswd:
+            save_keyring_credentials(_GITHUB_KEYRING, github_user, github_pswd)
+
+    # Set locale so that file names end up with appropriate character encodings
     locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
-    get_sources(downloads_root, id_list, user, password)
+    # And we're ready to get to it.
+    repos = get_repos(casics_user, casics_pswd, casics_host, casics_port)
+    get_sources(repos, root, id_list, github_user, github_pswd, showprogress, colorize)
 
 
-def get_sources(downloads_root, id_list, user, password):
-    casicsdb  = CasicsDB()
-    github_db = casicsdb.open('github')
-    repos     = github_db.repos
-
+def get_sources(repos, downloads_root, id_list, user, password, showprogress, colorize):
     downloads_tmp = os.path.join(downloads_root, 'tmp')
     os.makedirs(downloads_tmp, exist_ok=True)
 
-    msg('Downloading {} repos to {}'.format(len(id_list), downloads_root))
-    msg('Using temporary directory in {}'.format(downloads_tmp))
+    msg('Downloading {} repos to {}'.format(len(id_list), downloads_root), 'info', colorize)
+    msg('Using temporary directory in {}'.format(downloads_tmp), 'info', colorize)
 
     fields = dict.fromkeys(['owner', 'name', 'default_branch'], 1)
 
@@ -82,27 +173,39 @@ def get_sources(downloads_root, id_list, user, password):
     start = time()
     for id in iter(id_list):
         retry = True
-        while retry and failures < max_failures:
+        while retry and failures < _MAX_FAILURES:
             # Don't retry unless the problem may be transient.
             retry = False
             entry = repos.find_one({'_id': id}, fields)
             if not entry:
-                msg('*** skipping unknown GitHub id {}'.format(id))
-            if download(entry, downloads_tmp, downloads_root, user, password):
+                msg('*** skipping unknown GitHub id {}'.format(id), 'warning', colorize)
+                continue
+            if showprogress:
+                spinner = Halo(text='{} '.format(e_summary(entry)), spinner='boxBounce')
+                spinner.start()
+            else:
+                msg('{} '.format(e_summary(entry)), 'info', colorize)
+            if download(entry, downloads_tmp, downloads_root, user, password, colorize):
                 failures = 0
             else:
                 failures += 1
+            if showprogress:
+                spinner.stop()
 
-        if failures >= max_failures:
+        if failures >= _MAX_FAILURES:
             # Try pause & continue in case of transient network issues.
-            if retries <= max_retries:
+            if retries <= _MAX_RETRIES:
                 retries += 1
-                msg('*** Pausing because of too many consecutive failures')
+                msg('')
+                msg('*** Pausing because of too many consecutive failures',
+                    'warning', colorize)
                 sleep(300 * retries)
                 failures = 0
             else:
                 # We've already paused & restarted.
-                msg('*** Stopping because of too many consecutive failures')
+                msg('')
+                msg('*** Stopping because of too many consecutive failures',
+                    'error', colorize)
                 break
         count += 1
         if count % 100 == 0:
@@ -112,11 +215,11 @@ def get_sources(downloads_root, id_list, user, password):
     msg('Done.')
 
 
-def download(entry, downloads_tmp, downloads_root, user, password):
+def download(entry, downloads_tmp, downloads_root, user, password, colorize):
     localpath = generate_path(downloads_root, entry['_id'])
     if os.path.exists(localpath) and os.listdir(localpath):
         # Skip it if we already have it.
-        msg('already have {} -- skipping'.format(e_summary(entry)))
+        msg('already in {} -- skipping'.format(localpath), 'info', colorize)
         return True
 
     # Try first with the default master branch.
@@ -131,14 +234,15 @@ def download(entry, downloads_tmp, downloads_root, user, password):
         # is, we first try scraping the web page, and if that fails, we
         # resort to using an API call.
         if hasattr(e, 'code') and e.code == 404:
-            msg('no zip file for branch {} of {} -- looking at alternatives'
-                .format(entry['default_branch'], e_summary(entry)))
+            msg('no zip file for branch {} -- looking at alternatives'
+                .format(entry['default_branch']), 'warning', colorize)
             newurl = get_archive_url_by_scraping(entry)
             if newurl:
                 try:
                     outfile = wget.download(newurl, bar=None, out=downloads_tmp)
                 except Exception as newe:
-                    msg('*** failed to download {}: {}'.format(entry['_id'], str(newe)))
+                    msg('*** failed to download: {}'.format(str(newe)),
+                        'warning', colorize)
                     return False
             else:
                 newurl = get_archive_url_by_api(entry, user, password)
@@ -146,14 +250,15 @@ def download(entry, downloads_tmp, downloads_root, user, password):
                     try:
                         outfile = wget.download(newurl, bar=None, out=downloads_tmp)
                     except Exception as newe:
-                        msg('*** failed to download {}: {}'.format(entry['_id'], str(newe)))
+                        msg('*** failed to download: {}'.format(str(newe)),
+                            'error', colorize)
                         return False
                 else:
-                    msg("*** can't find download URL for {}, branch '{}'".format(
-                        e_summary(entry), entry['default_branch']))
+                    msg("*** can't find download URL for branch '{}'".format(
+                        entry['default_branch']), 'error', colorize)
                     return False
         else:
-            msg('*** failed to download {}: {}'.format(entry['_id'], str(e)))
+            msg('*** failed to download: {}'.format(str(e)))
             return False
 
     # Unzip it to a temporary path, then move it to the final location.
@@ -163,20 +268,30 @@ def download(entry, downloads_tmp, downloads_root, user, password):
         outdir = unzip_archive(outfile, downloads_tmp)
         os.remove(outfile)
     except Exception as e:
-        msg('{} left zipped: {}'.format(outfile, str(e)))
+        msg('{} left zipped: {}'.format(outfile, str(e)), 'info', colorize)
         return False
 
     os.makedirs(os.path.dirname(localpath), exist_ok=True)
     os.rename(outdir, localpath)
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    msg('{} --> {}, zip size {}, finished at {}'.format(
-        e_summary(entry), localpath, filesize, now))
+    msg('--> {}, zip size {}, finished at {}'.format(localpath, filesize, now),
+        'info', colorize)
     return True
 
-
-# Helpers
+
+# Helpers.
 # .............................................................................
+
+def get_repos(user, password, host, port):
+    db = MongoClient('mongodb://{}:{}@{}:{}/github?authSource=admin'
+                     .format(user, password, host, port),
+                     serverSelectionTimeoutMS=_CONN_TIMEOUT,
+                     tz_aware=True, connect=True, socketKeepAlive=True)
+    github_db = db[_CASICS_DB_NAME]
+    repos_collection = github_db.repos
+    return repos_collection
+
 
 def unzip_archive(file, dest):
     # This only unzips what it guesses to be text files; for binary files,
@@ -273,24 +388,36 @@ def get_archive_url_by_api(entry, user, password):
     else:
         return None
 
-
+
 # Plac annotations for main function arguments
 # .............................................................................
 # Argument annotations are: (help, kind, abbrev, type, choices, metavar)
 # Plac automatically adds a -h argument for help, so no need to do it here.
 
 main.__annotations__ = dict(
-    username       = ('use specified account user name',        'option', 'a', str),
-    downloads_root = ('download directory root',                'option', 'd', str),
-    file           = ('file containing repository identifiers', 'option', 'f'),
-    id             = ('comma-separated list of repository ids', 'option', 'i'),
+    file        = ('file containing repository identifiers',                 'option', 'f'),
+    id          = ('comma-separated list of repository ids on command line', 'option', 'i'),
+    root        = ('root of directory where downloads will be written',      'option', 'r'),
+    casics_user = ('CASICS database user name',                              'option', 'u'),
+    casics_pswd = ('CASICS database user password',                          'option', 'p'),
+    casics_host = ('CASICS database server host',                            'option', 's'),
+    casics_port = ('CASICS database connection port number',                 'option', 'o'),
+    github_user = ('GitHub database user name',                              'option', 'U'),
+    github_pswd = ('GitHub database user password',                          'option', 'P'),
+    nokeyring   = ('do not use a keyring',                                   'flag',   'X'),
+    nofrills    = ('do not show progress spinners or color output',          'flag',   'Y'),
 )
 
-
+
 # Entry point
 # .............................................................................
 
-def cli_main():
-    plac.call(main)
+plac.call(main)
 
-cli_main()
+
+# For Emacs users
+# ......................................................................
+# Local Variables:
+# mode: python
+# python-indent-offset: 4
+# End:
