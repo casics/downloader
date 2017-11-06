@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+'''
+downloader: download copies of repositories to local file system
+
+This module contacts the CASICS server to get information about one or more
+specified repositories, then downloads a copy of those repositories to the
+local file system.
+'''
+
+# Allow this program to be executed directly from the 'bin' directory.
+import sys
+sys.path.append('..')
+
+# Hand over to the command line interface.
+from downloader import *
+plac.call(main)
