@@ -193,7 +193,8 @@ def get_sources(repos, downloads_root, id_list, user, password, showprogress, co
                 msg('*** skipping unknown GitHub id {}'.format(id), 'warning', colorize)
                 continue
             if showprogress:
-                spinner = Halo(text='{} '.format(e_summary(entry)), spinner='boxBounce')
+                spinner = Halo(text=colorcode('{} '.format(e_summary(entry)),
+                                              'info', colorize), spinner='boxBounce')
                 spinner.start()
             else:
                 msg('{} '.format(e_summary(entry)), 'info', colorize)
