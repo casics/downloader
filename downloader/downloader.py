@@ -230,11 +230,12 @@ def download(entry, downloads_tmp, downloads_root, user, password, colorize):
     localpath = generate_path(downloads_root, entry['_id'])
     if os.path.exists(localpath) and os.listdir(localpath):
         # Skip it if we already have it.
-        msg('already in {} -- skipping'.format(localpath), 'info', colorize)
+        msg('already in {} -- skipping'.format(localpath), 'blue', colorize)
         return True
 
     # Try first with the default master branch.
     outfile = None
+    start = datetime.now()
     try:
         url = "https://github.com/{}/{}/archive/{}.zip".format(
             entry['owner'], entry['name'], entry['default_branch'])
@@ -285,9 +286,8 @@ def download(entry, downloads_tmp, downloads_root, user, password, colorize):
     os.makedirs(os.path.dirname(localpath), exist_ok=True)
     os.rename(outdir, localpath)
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    msg('--> {}, zip size {}, finished at {}'.format(localpath, filesize, now),
-        'info', colorize)
+    td = str(datetime.now() - start).split('.')[0]
+    msg('--> {}, {}, time {}'.format(localpath, filesize, td), 'info', colorize)
     return True
 
 
