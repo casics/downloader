@@ -7,11 +7,6 @@ specified repositories, then downloads a copy of those repositories to the
 local file system.
 '''
 
-__version__ = '1.0.0'
-__author__  = 'Michael Hucka <mhucka@caltech.edu>'
-__email__   = 'mhucka@caltech.edu'
-__license__ = 'GPLv3'
-
 from   base64 import b64encode
 from   datetime import datetime
 import errno
@@ -38,6 +33,7 @@ from common.casics import *
 from common.messages import *
 from common.credentials import *
 
+
 # Global constants.
 # .............................................................................
 
@@ -68,10 +64,25 @@ _CASICS_DB_NAME = 'github'
 _CASICS_KEYRING = "org.casics.casics"
 '''The name of the keyring entry for LoCTerms client users.'''
 
-# Main body.
+
+# Main interface.
 # .............................................................................
 # Currently this only does GitHub, but extending this to handle other hosts
 # should hopefully be possible.
+
+@plac.annotations(
+    file        = ('file containing repository identifiers',            'option', 'f'),
+    id          = ('comma-separated list of repo ids on command line',  'option', 'i'),
+    root        = ('root of directory where downloads will be written', 'option', 'r'),
+    casics_user = ('CASICS database user name',                         'option', 'u'),
+    casics_pswd = ('CASICS database user password',                     'option', 'p'),
+    casics_host = ('CASICS database server host',                       'option', 's'),
+    casics_port = ('CASICS database connection port number',            'option', 'o'),
+    github_user = ('GitHub database user name',                         'option', 'U'),
+    github_pswd = ('GitHub database user password',                     'option', 'P'),
+    nokeyring   = ('do not use a keyring',                              'flag',   'X'),
+    nofrills    = ('do not show progress spinners or color output',     'flag',   'Y'),
+)
 
 def main(root=None, file=None, id=None, nokeyring=False, nofrills=False,
          casics_user=None, casics_pswd=None, casics_host=None, casics_port=None,
@@ -387,32 +398,6 @@ def get_archive_url_by_api(entry, user, password):
         return response.readall().decode('utf-8')
     else:
         return None
-
-
-# Plac annotations for main function arguments
-# .............................................................................
-# Argument annotations are: (help, kind, abbrev, type, choices, metavar)
-# Plac automatically adds a -h argument for help, so no need to do it here.
-
-main.__annotations__ = dict(
-    file        = ('file containing repository identifiers',                 'option', 'f'),
-    id          = ('comma-separated list of repository ids on command line', 'option', 'i'),
-    root        = ('root of directory where downloads will be written',      'option', 'r'),
-    casics_user = ('CASICS database user name',                              'option', 'u'),
-    casics_pswd = ('CASICS database user password',                          'option', 'p'),
-    casics_host = ('CASICS database server host',                            'option', 's'),
-    casics_port = ('CASICS database connection port number',                 'option', 'o'),
-    github_user = ('GitHub database user name',                              'option', 'U'),
-    github_pswd = ('GitHub database user password',                          'option', 'P'),
-    nokeyring   = ('do not use a keyring',                                   'flag',   'X'),
-    nofrills    = ('do not show progress spinners or color output',          'flag',   'Y'),
-)
-
-
-# Entry point
-# .............................................................................
-
-plac.call(main)
 
 
 # For Emacs users
