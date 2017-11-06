@@ -173,6 +173,7 @@ def get_sources(repos, downloads_root, id_list, user, password, showprogress, co
     downloads_tmp = os.path.join(downloads_root, 'tmp')
     os.makedirs(downloads_tmp, exist_ok=True)
 
+    msg('Starting {}.'.format(datetime.now().strftime("%Y-%m-%d %H:%M")), 'info', colorize)
     msg('Downloading {} repos to {}'.format(len(id_list), downloads_root), 'info', colorize)
     msg('Using temporary directory in {}'.format(downloads_tmp), 'info', colorize)
 
@@ -223,7 +224,7 @@ def get_sources(repos, downloads_root, id_list, user, password, showprogress, co
             msg('{} [{:2f}]'.format(count, time() - start))
             start = time()
     msg('')
-    msg('Done.')
+    msg('Done {}.'.format(datetime.now().strftime("%Y-%m-%d %H:%M")), 'info', colorize)
 
 
 def download(entry, downloads_tmp, downloads_root, user, password, colorize):
