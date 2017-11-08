@@ -12,7 +12,7 @@
 __version__      = '1.0.0'
 __title__        = 'CASICS Downloader'
 __url__          = 'https://github.com/casics/downloader'
-__author__       = 'Michael Hucka'
+__author__       = 'Michael Hucka <mhucka@caltech.edu>'
 __email__        = 'casics-team@googlegroups.com'
 __license__      = 'GNU General Public License, version 3.0'
 __copyright__    = 'Copyright (C) 2015 by the California Institute of Technology'
