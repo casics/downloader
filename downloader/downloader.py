@@ -7,6 +7,8 @@ specified repositories, then downloads a copy of those repositories to the
 local file system.
 '''
 
+import concurrent.futures
+
 from   base64 import b64encode
 from   datetime import datetime
 import errno
@@ -74,6 +76,7 @@ _CASICS_KEYRING = "org.casics.casics"
     file        = ('file containing repository identifiers',            'option', 'f'),
     id          = ('comma-separated list of repo ids on command line',  'option', 'i'),
     root        = ('root of directory where downloads will be written', 'option', 'r'),
+    threads     = ('use given number of threads (default = 1)',         'option', 't'),
     casics_user = ('CASICS database user name',                         'option', 'u'),
     casics_pswd = ('CASICS database user password',                     'option', 'p'),
     casics_host = ('CASICS database server host',                       'option', 's'),
@@ -84,7 +87,7 @@ _CASICS_KEYRING = "org.casics.casics"
     nofrills    = ('do not show progress spinners or color output',     'flag',   'Y'),
 )
 
-def main(root=None, file=None, id=None, nokeyring=False, nofrills=False,
+def main(root=None, file=None, id=None, threads=1, nokeyring=False, nofrills=False,
          casics_user=None, casics_pswd=None, casics_host=None, casics_port=None,
          github_user=None, github_pswd=None):
     '''Download copies of repositories to local file system.
@@ -103,6 +106,10 @@ repository numeric identifier per line.  If a list of identifiers is given
 with `-i` on the command line, it should be one or more numeric identifiers
 separated by commas with no spaces between them.
 
+Be kind when using threads.  Don't hit GitHub with a lot of simultaneous
+downloads -- not only is it abusive of their resources, but you may also
+risk being banned.
+
 By default, this uses the operating system's keyring/keychain functionality
 to get the user name and password needed to access both the CASICS database
 server and GitHub over the network.  If no such credentials are found, it
@@ -118,22 +125,20 @@ Additional arguments can be used to specify the host and port on which the
 CASICS database.
 
 The output will use spinners and color, unless the no-frills option `-Y` is
-given.'''
+given.
+    '''
     # Dealing with negated variables is confusing, so turn them around.
     keyring = not nokeyring
-    showprogress = not nofrills
-    colorize = 'termcolor' in sys.modules and not nofrills
+    fancy = not nofrills
+    threads = int(threads)
 
     # Check arguments.
     if not root:
-        raise SystemExit(colorcode('Need root of directory where downloads should go.',
-                                   'error', colorize))
+        raise SystemExit(colorcode('Need directory where to put downloads.', 'error', fancy))
     elif not os.path.exists(root):
-        raise SystemExit(colorcode('"{}" does not exist.'.format(root),
-                                   'error', colorize))
+        raise SystemExit(colorcode('"{}" does not exist.'.format(root), 'error', fancy))
     elif not os.path.isdir(root):
-        raise SystemExit(colorcode('"{}" is not a directory.'.format(root),
-                                   'error', colorize))
+        raise SystemExit(colorcode('"{}" is not a directory.'.format(root), 'error', fancy))
 
     if id:
         id_list = [int(x) for x in id.split(',')]
@@ -141,8 +146,8 @@ given.'''
         with open(file) as f:
             id_list = [int(x) for x in f.read().splitlines()]
     else:
-        raise SystemExit(colorcode('Need identifiers of repositories to be downloaded.',
-                                   'error', colorize))
+        raise SystemExit(colorcode('Need either list or file of repository identifiers.',
+                                   'error', fancy))
 
     if not (casics_user and casics_pswd and casics_host and casics_port):
         (casics_user, casics_pswd, casics_host, casics_port) = obtain_credentials(
@@ -161,136 +166,140 @@ given.'''
         (s_user, s_pswd, _, _) = get_keyring_credentials(_GITHUB_KEYRING)
         if s_user != github_user or s_pswd != github_pswd:
             save_keyring_credentials(_GITHUB_KEYRING, github_user, github_pswd)
+    if threads < 1:
+        msg('Threads < 1 make no sense -- using threads = 1.', 'warning', fancy)
+        threads = 1
 
     # Set locale so that file names end up with appropriate character encodings
     locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
     # And we're ready to get to it.
     repos = get_repos(casics_user, casics_pswd, casics_host, casics_port)
-    get_sources(repos, root, id_list, github_user, github_pswd, showprogress, colorize)
+    get_sources(repos, root, id_list, github_user, github_pswd, threads, fancy)
 
 
-def get_sources(repos, downloads_root, id_list, user, password, showprogress, colorize):
-    downloads_tmp = os.path.join(downloads_root, 'tmp')
-    os.makedirs(downloads_tmp, exist_ok=True)
+def get_sources(repos, downloads_root, id_list, user, password, threads, fancy):
+    tmpdir = os.path.join(downloads_root, 'tmp')
+    os.makedirs(tmpdir, exist_ok=True)
 
-    msg('Starting {}.'.format(datetime.now().strftime("%Y-%m-%d %H:%M")), 'info', colorize)
-    msg('Downloading {} repos to {}'.format(len(id_list), downloads_root), 'info', colorize)
-    msg('Using temporary directory in {}'.format(downloads_tmp), 'info', colorize)
+    msg('Starting {}.'.format(datetime.now().strftime("%Y-%m-%d %H:%M")), 'info', fancy)
+    msg('Downloading {} repos to {}'.format(len(id_list), downloads_root), 'info', fancy)
+    msg('Using temporary directory in {}'.format(tmpdir), 'info', fancy)
+    msg('Using {} thread{}.'.format(threads, 's' if (threads > 1) else ''), 'info', fancy)
 
     fields = dict.fromkeys(['owner', 'name', 'default_branch'], 1)
+
+    def do_download(id):
+        entry = repos.find_one({'_id': id}, fields)
+        if not entry:
+            msg('*** skipping unknown GitHub id {}'.format(id), 'warning', fancy)
+            return False
+        return download(entry, tmpdir, downloads_root, user, password, threads > 1, fancy)
 
     count = 0
     failures = 0
     retries = 0
-    start = time()
-    for id in iter(id_list):
-        retry = True
-        while retry and failures < _MAX_FAILURES:
-            # Don't retry unless the problem may be transient.
-            retry = False
-            entry = repos.find_one({'_id': id}, fields)
-            if not entry:
-                msg('*** skipping unknown GitHub id {}'.format(id), 'warning', colorize)
-                continue
-            if showprogress:
-                spinner = Halo(text=colorcode('{} '.format(e_summary(entry)),
-                                              'info', colorize), spinner='boxBounce')
-                spinner.start()
-            else:
-                msg('{} '.format(e_summary(entry)), 'info', colorize)
-            if download(entry, downloads_tmp, downloads_root, user, password, colorize):
-                failures = 0
-            else:
-                failures += 1
-            if showprogress:
-                spinner.stop()
-
-        if failures >= _MAX_FAILURES:
-            # Try pause & continue in case of transient network issues.
-            if retries <= _MAX_RETRIES:
-                retries += 1
-                msg('')
-                msg('*** Pausing because of too many consecutive failures',
-                    'warning', colorize)
-                sleep(300 * retries)
-                failures = 0
-            else:
-                # We've already paused & restarted.
-                msg('')
-                msg('*** Stopping because of too many consecutive failures',
-                    'error', colorize)
-                break
-        count += 1
-        if count % 100 == 0:
-            msg('{} [{:2f}]'.format(count, time() - start))
-            start = time()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
+        start = time()
+        for success in executor.map(do_download, iter(id_list)):
+            failures += int(not success)
+            if failures >= _MAX_FAILURES:
+                # Try pause & continue in case of transient network issues.
+                if retries <= _MAX_RETRIES:
+                    retries += 1
+                    msg('')
+                    msg('*** Pausing because of too many consecutive failures',
+                        'warning', fancy)
+                    sleep(300 * retries)
+                    failures = 0
+                else:
+                    # We've already paused & restarted.
+                    msg('')
+                    msg('*** Stopping because of too many consecutive failures',
+                        'error', fancy)
+                    break
+            count += 1
+            if count % 100 == 0:
+                msg('{} [{:2f}]'.format(count, time() - start))
+                start = time()
     msg('')
-    msg('Done {}.'.format(datetime.now().strftime("%Y-%m-%d %H:%M")), 'info', colorize)
+    msg('Done {}.'.format(datetime.now().strftime("%Y-%m-%d %H:%M")), 'info', fancy)
 
 
-def download(entry, downloads_tmp, downloads_root, user, password, colorize):
+def download(entry, tmpdir, downloads_root, user, password, threaded, fancy):
     localpath = generate_path(downloads_root, entry['_id'])
-    if os.path.exists(localpath) and os.listdir(localpath):
-        # Skip it if we already have it.
-        msg('already in {} -- skipping'.format(localpath), 'blue', colorize)
-        return True
+    entry_info = e_summary(entry)
 
-    # Try first with the default master branch.
-    outfile = None
-    start = datetime.now()
-    try:
-        url = "https://github.com/{}/{}/archive/{}.zip".format(
-            entry['owner'], entry['name'], entry['default_branch'])
-        outfile = wget.download(url, bar=None, out=downloads_tmp)
-    except Exception as e:
-        # If we get a 404 from GitHub, it may mean there is no zip file for
-        # what we think is the default branch.  To find out what it really
-        # is, we first try scraping the web page, and if that fails, we
-        # resort to using an API call.
-        if hasattr(e, 'code') and e.code == 404:
-            msg('no zip file for branch {} -- looking at alternatives'
-                .format(entry['default_branch']), 'warning', colorize)
-            newurl = get_archive_url_by_scraping(entry)
-            if newurl:
-                try:
-                    outfile = wget.download(newurl, bar=None, out=downloads_tmp)
-                except Exception as newe:
-                    msg('*** failed to download: {}'.format(str(newe)),
-                        'warning', colorize)
-                    return False
-            else:
-                newurl = get_archive_url_by_api(entry, user, password)
+    # If we are NOT running multiple threads, we can have the spinner print
+    # info about the repo before we start the process of trying to download.
+    # That makes it clear what repo is being attempted at a given moment.
+    # Unfortunately, if running multiple threads, the output will be jumbled
+    # if we try to do that.  So, we have a bit of grungy output hacking here.
+
+    spinner_prefix = '{} '.format(entry_info) if not threaded else ""
+    def status(text, style):
+        if fancy and not threaded:
+            msg('{}'.format(text), style, fancy)
+        else:
+            msg('{} {}'.format(entry_info, text), style, fancy)
+
+    with Halo(text=spinner_prefix, spinner='boxBounce', enabled=fancy):
+        if os.path.exists(localpath) and os.listdir(localpath):
+            status('already in {} -- skipping'.format(localpath), 'blue')
+            return True
+        # Try first with the default master branch.
+        outfile = None
+        start = datetime.now()
+        try:
+            url = "https://github.com/{}/{}/archive/{}.zip".format(
+                entry['owner'], entry['name'], entry['default_branch'])
+            outfile = wget.download(url, bar=None, out=tmpdir)
+        except Exception as ex:
+            # If we get a 404 from GitHub, it may mean there is no zip file for
+            # what we think is the default branch.  To find out what it really
+            # is, we first try scraping the web page, and if that fails, we
+            # resort to using an API call.
+            if hasattr(ex, 'code') and ex.code == 404:
+                status('no zip file for branch "{}" -- looking for alternatives'
+                       .format(entry['default_branch']), 'warning')
+                newurl = get_archive_url_by_scraping(entry)
                 if newurl:
                     try:
-                        outfile = wget.download(newurl, bar=None, out=downloads_tmp)
+                        outfile = wget.download(newurl, bar=None, out=tmpdir)
                     except Exception as newe:
-                        msg('*** failed to download: {}'.format(str(newe)),
-                            'error', colorize)
+                        status('*** failed to download: {}' .format(str(newe)), 'error')
                         return False
                 else:
-                    msg("*** can't find download URL for branch '{}'".format(
-                        entry['default_branch']), 'error', colorize)
-                    return False
-        else:
-            msg('*** failed to download: {}'.format(str(e)))
+                    newurl = get_archive_url_by_api(entry, user, password)
+                    if newurl:
+                        try:
+                            outfile = wget.download(newurl, bar=None, out=tmpdir)
+                        except Exception as newe:
+                            status('*** failed to download: {}'.format(str(newe)), 'error')
+                            return False
+                    else:
+                        status("can't find download URL for branch '{}'"
+                               .format(entry['default_branch']), 'error')
+                        return False
+            else:
+                status('*** failed to download: {}'.format(str(ex)), 'error')
+                return False
+
+        # Unzip it to a temporary path, then move it to the final location.
+
+        filesize = file_size(outfile)
+        try:
+            outdir = unzip_archive(outfile, tmpdir)
+            os.remove(outfile)
+        except Exception as ex:
+            msg('left zipped in {}: {}'.format(outfile, str(ex)), 'info')
             return False
 
-    # Unzip it to a temporary path, then move it to the final location.
+        os.makedirs(os.path.dirname(localpath), exist_ok=True)
+        os.rename(outdir, localpath)
 
-    filesize = file_size(outfile)
-    try:
-        outdir = unzip_archive(outfile, downloads_tmp)
-        os.remove(outfile)
-    except Exception as e:
-        msg('{} left zipped: {}'.format(outfile, str(e)), 'info', colorize)
-        return False
-
-    os.makedirs(os.path.dirname(localpath), exist_ok=True)
-    os.rename(outdir, localpath)
-
-    td = str(datetime.now() - start).split('.')[0]
-    msg('--> {}, {}, time {}'.format(localpath, filesize, td), 'info', colorize)
-    return True
+        td = str(datetime.now() - start).split('.')[0]
+        status('--> {}, {}, time {}'.format(localpath, filesize, td), 'info')
+        return True
 
 
 # Helpers.
