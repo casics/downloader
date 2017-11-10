@@ -158,14 +158,14 @@ given.
             _GITHUB_KEYRING, "GitHub", github_user, github_pswd, -1, -1)
     if keyring:
         # Save the credentials if they're different from what's saved.
-        (s_user, s_pswd, s_host, s_port) = get_keyring_credentials(_CASICS_KEYRING)
+        (s_user, s_pswd, s_host, s_port) = get_credentials(_CASICS_KEYRING)
         if s_user != casics_user or s_pswd != casics_pswd or \
            s_host != casics_host or s_port != casics_port:
-            save_keyring_credentials(_CASICS_KEYRING, casics_user, casics_pswd,
-                                     casics_host, casics_port)
-        (s_user, s_pswd, _, _) = get_keyring_credentials(_GITHUB_KEYRING)
+            save_credentials(_CASICS_KEYRING, casics_user, casics_pswd,
+                             casics_host, casics_port)
+        (s_user, s_pswd, _, _) = get_credentials(_GITHUB_KEYRING)
         if s_user != github_user or s_pswd != github_pswd:
-            save_keyring_credentials(_GITHUB_KEYRING, github_user, github_pswd)
+            save_credentials(_GITHUB_KEYRING, github_user, github_pswd)
     if threads < 1:
         msg('Threads < 1 make no sense -- using threads = 1.', 'warning', fancy)
         threads = 1
