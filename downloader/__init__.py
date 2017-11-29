@@ -6,5 +6,5 @@
 # @website https://github.com/casics/downloader
 # =============================================================================
 
+from .__version__ import *
 from .downloader import *
-from .version import *

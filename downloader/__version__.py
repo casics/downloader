@@ -1,5 +1,5 @@
 # =============================================================================
-# @file    version.py
+# @file    __version__.py
 # @brief   CASICS Downloader version info
 # @author  Michael Hucka <mhucka@caltech.edu>
 # @license Please see the file named LICENSE in the project directory
